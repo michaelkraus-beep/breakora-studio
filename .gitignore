@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+backend/venv/
+backend/__pycache__/
+
+# Build and Output
+build/
+dist/
+coverage/
+
+# IDE and Environment
+.DS_Store
+.vscode/
+.env*
+!.env.example
+.gemini/
+
+# Logs
+*.log

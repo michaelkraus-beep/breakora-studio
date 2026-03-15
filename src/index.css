@@ -1,0 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&family=Orbitron:wght@400;700&family=Outfit:wght@300;400;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Space Grotesk", "Orbitron", sans-serif;
+  --font-sci-fi: "Orbitron", sans-serif;
+  --font-modern: "Outfit", sans-serif;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #09090b; /* zinc-950 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a; /* zinc-800 */
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46; /* zinc-700 */
+}
+
+/* Glassmorphism & Futuristic Utilities */
+.glass-panel {
+  background: rgba(9, 9, 11, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.glass-card {
+  background: rgba(24, 24, 27, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.glow-cyan {
+  box-shadow: 0 0 15px rgba(34, 211, 238, 0.15);
+}
+
+.glow-purple {
+  box-shadow: 0 0 15px rgba(168, 85, 247, 0.15);
+}
+
+.futuristic-border {
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  position: relative;
+}
+
+.futuristic-border::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 4px;
+  height: 4px;
+  border-top: 1px solid #22d3ee;
+  border-right: 1px solid #22d3ee;
+}
+
+/* Flexlayout Header Fix: Allow Cockpit Dropdowns to Overflow */
+.flexlayout__tabset_header {
+  overflow: visible !important;
+}
+
+.flexlayout__tabset_header_content {
+  overflow: visible !important;
+}
+
+.flexlayout__tab_button_container {
+  overflow: visible !important;
+}

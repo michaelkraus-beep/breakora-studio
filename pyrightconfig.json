@@ -1,0 +1,26 @@
+{
+  "include": [
+    "backend",
+    "tmp"
+  ],
+  "venvPath": "F:/breakora-new/backend",
+  "venv": "venv",
+  "extraPaths": [
+    "F:/breakora-new/backend"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "backend",
+      "extraPaths": [
+        "F:/breakora-new/backend"
+      ]
+    },
+    {
+      "root": "tmp",
+      "extraPaths": [
+        "F:/breakora-new/backend"
+      ]
+    }
+  ],
+  "typeCheckingMode": "basic"
+}
