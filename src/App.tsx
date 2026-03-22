@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useBinanceStream } from './hooks/use-binance-stream';
 import { TickerHeader } from './components/dashboard/TickerHeader';
 import { DashboardLayout } from './components/dashboard/DashboardLayout';
@@ -12,6 +12,20 @@ import { useMarketScanner } from './hooks/use-market-scanner';
 
 type View = 'DASHBOARD' | 'SCANNER';
 
+/**
+ * Memoized View Wrapper to prevent App's ticker re-renders from hitting the scanner
+ */
+const ScannerView = React.memo(({ scanner, onSelectSymbol }: { scanner: any, onSelectSymbol: (s: string) => void }) => {
+    return (
+        <div className="flex-1 overflow-hidden">
+            <MarketScanner 
+                onSelectSymbol={onSelectSymbol} 
+                scannerState={scanner}
+            />
+        </div>
+    );
+});
+
 export default function App() {
   const [activeSymbol, setActiveSymbol] = useState(() => localStorage.getItem('activeSymbol') || 'btcusdt');
   const [marketType, setMarketType] = useState<'spot' | 'perp'>(() => {
@@ -20,6 +34,7 @@ export default function App() {
   });
   const [timeframe, setTimeframe] = useState(() => localStorage.getItem('timeframe') || '1m');
   const [currentView, setCurrentView] = useState<View>('DASHBOARD');
+  const [spawnRequest, setSpawnRequest] = useState<{ symbol: string; marketType: 'spot' | 'perp'; timestamp: number } | null>(null);
   
   // Use shared stream for the global header/ticker
   const { ticker, latency, tickSize } = useSharedStream(activeSymbol, marketType, timeframe);
@@ -55,6 +70,28 @@ export default function App() {
   
   // Lifted Scanner State
   const scanner = useMarketScanner();
+
+  const handleActiveChartChange = useCallback((state: { symbol: string, marketType: 'spot' | 'perp', timeframe: string }) => {
+    if (!state || !state.symbol || !state.marketType) {
+        console.warn("[App] Received invalid state in handleActiveChartChange:", state);
+        return;
+    }
+    setActiveSymbol(state.symbol);
+    setMarketType(state.marketType);
+    setTimeframe(state.timeframe);
+  }, []);
+
+  const handleSelectSymbol = useCallback((symbol: string) => {
+    const s = symbol.toLowerCase();
+    console.log("[App] Scanner selection triggered for:", s);
+    // Defer setting active symbol until the dashboard spawns and selects the new tab
+    setSpawnRequest({ symbol: s, marketType, timestamp: Date.now() });
+    setCurrentView('DASHBOARD');
+  }, [marketType]);
+
+  const handleClearSpawnRequest = useCallback(() => {
+    setSpawnRequest(null);
+  }, []);
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-white overflow-hidden font-sans selection:bg-cyan-500/30">
@@ -116,25 +153,18 @@ export default function App() {
                     symbol={activeSymbol}
                     marketType={marketType}
                     tickSize={tickSize}
-                    onActiveChartChange={(state) => {
-                        setActiveSymbol(state.symbol);
-                        setMarketType(state.marketType);
-                        setTimeframe(state.timeframe);
-                    }}
+                    spawnRequest={spawnRequest}
+                    onClearSpawnRequest={handleClearSpawnRequest}
+                    onActiveChartChange={handleActiveChartChange}
                 />
             </div>
           )}
 
           {currentView === 'SCANNER' && (
-            <div className="flex-1 overflow-hidden">
-                <MarketScanner 
-                    onSelectSymbol={(symbol) => {
-                        setActiveSymbol(symbol.toLowerCase());
-                        setCurrentView('DASHBOARD');
-                    }} 
-                    scannerState={scanner}
-                />
-            </div>
+            <ScannerView 
+                scanner={scanner}
+                onSelectSymbol={handleSelectSymbol}
+            />
           )}
       </div>
 

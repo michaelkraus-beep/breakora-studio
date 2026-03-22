@@ -1,213 +1,230 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import {
+  ScanResult, ScannerFilters, FilterKey, MarketCapTier,
+  DEFAULT_SCANNER_FILTERS, SortField, SortDir
+} from '../types/scanner';
 
-export interface MarketAlert {
-  id: string;
-  symbol: string;
-  fullSymbol: string;
-  type: 'HIGH_VOLATILITY' | 'PRICE_SURGE' | 'PRICE_DROP' | 'HIGH_VOLUME';
-  severity: 'LOW' | 'MEDIUM' | 'HIGH';
-  message: string;
-  firstDetected: number;
-  lastUpdated: number;
-  value: number;
-}
-
-export interface ScannerFilters {
-  minVolume: number;
-  minMarketCap: number;
-  lookbackValue: number;
-  lookbackUnit: 'bars' | 'minutes' | 'hours' | 'days' | 'weeks';
-  minVolChange: number;
-  useExchangeHours: boolean;
-}
-
-interface Ticker24h {
-  symbol: string;
-  priceChangePercent: string;
-  quoteVolume: string;
-  lastPrice: string;
-  count: number;
-}
+/** Market cap tier ordering for sorting */
+const TIER_ORDER: Record<string, number> = { MEGA: 5, LARGE: 4, MID: 3, SMALL: 2, MICRO: 1 };
 
 export function useMarketScanner() {
-  const [alerts, setAlerts] = useState<MarketAlert[]>([]);
+  const [rawResults, setRawResults] = useState<ScanResult[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [lastScan, setLastScan] = useState<number>(Date.now());
-  
-  const [filters, setFilters] = useState<ScannerFilters>({
-    minVolume: 1000000,
-    minMarketCap: 10000000,
-    lookbackValue: 89,
-    lookbackUnit: 'bars',
-    minVolChange: 5,
-    useExchangeHours: false
-  });
+  const [filters, setFilters] = useState<ScannerFilters>(() => ({ ...DEFAULT_SCANNER_FILTERS }));
+  const [totalCount, setTotalCount] = useState(0);
+  const scanRef = useRef<AbortController | null>(null);
 
-  const isSessionActive = useCallback(() => {
-    if (!filters.useExchangeHours) return true;
+  // -----------------------------------------------------------------------
+  // Toggle a single filter on/off
+  // -----------------------------------------------------------------------
+  const toggleFilter = useCallback((key: FilterKey) => {
+    setFilters(prev => {
+      const current = prev[key];
+      if (current && typeof current === 'object' && 'enabled' in current) {
+        return { ...prev, [key]: { ...current, enabled: !current.enabled } };
+      }
+      return prev;
+    });
+  }, []);
 
-    const now = new Date();
-    const nyTimeStr = now.toLocaleString("en-US", {timeZone: "America/New_York"});
-    const nyTime = new Date(nyTimeStr);
-    const hour = nyTime.getHours();
-    const minute = nyTime.getMinutes();
-    const timeValue = hour + (minute / 60);
+  // -----------------------------------------------------------------------
+  // Update filter value (number, boolean, or set)
+  // -----------------------------------------------------------------------
+  const updateFilterValue = useCallback(<K extends FilterKey>(key: K, value: any) => {
+    setFilters(prev => {
+      const current = prev[key];
+      if (current && typeof current === 'object' && 'enabled' in current) {
+        return { ...prev, [key]: { ...current, value } };
+      }
+      return prev;
+    });
+  }, []);
 
-    // NYSE Regular Hours: 09:30 - 16:00
-    return timeValue >= 9.5 && timeValue < 16;
-  }, [filters.useExchangeHours]);
+  // -----------------------------------------------------------------------
+  // Update range filter (RSI)
+  // -----------------------------------------------------------------------
+  const updateRangeFilter = useCallback((key: FilterKey, field: 'min' | 'max', val: number) => {
+    setFilters(prev => {
+      const current = prev[key] as any;
+      if (current && 'min' in current) {
+        return { ...prev, [key]: { ...current, [field]: val } };
+      }
+      return prev;
+    });
+  }, []);
 
+  // -----------------------------------------------------------------------
+  // Set sort
+  // -----------------------------------------------------------------------
+  const setSort = useCallback((sortBy: SortField, sortDir?: SortDir) => {
+    setFilters(prev => ({
+      ...prev,
+      sortBy,
+      sortDir: sortDir ?? (prev.sortBy === sortBy ? (prev.sortDir === 'desc' ? 'asc' : 'desc') : 'desc')
+    }));
+  }, []);
+
+  // -----------------------------------------------------------------------
+  // Reset all filters to defaults
+  // -----------------------------------------------------------------------
+  const resetFilters = useCallback(() => {
+    setFilters({ ...DEFAULT_SCANNER_FILTERS, marketCapTiers: { enabled: false, value: new Set(['MEGA', 'LARGE', 'MID', 'SMALL', 'MICRO'] as MarketCapTier[]) } });
+  }, []);
+
+  // -----------------------------------------------------------------------
+  // Client-side filter: only apply ENABLED filters (AND logic among enabled)
+  // -----------------------------------------------------------------------
+  const applyClientFilters = useCallback((raw: ScanResult[]): ScanResult[] => {
+    return raw.filter(r => {
+      // Min Score
+      if (filters.minScore.enabled && r.score < filters.minScore.value) return false;
+
+      // Core
+      if (filters.minRvol.enabled && r.rvol < filters.minRvol.value) return false;
+      if (filters.minVolSurge.enabled && r.vol_surge_pct < filters.minVolSurge.value) return false;
+      if (filters.minPriceChange.enabled && Math.abs(r.price_change_5m) < filters.minPriceChange.value) return false;
+      if (filters.minVwapDev.enabled && Math.abs(r.vwap_pct) < filters.minVwapDev.value) return false;
+
+      // Technical
+      if (filters.rsiRange.enabled) {
+        const inExtreme = r.rsi <= filters.rsiRange.min || r.rsi >= filters.rsiRange.max;
+        if (!inExtreme) return false;
+      }
+      if (filters.minAtrPct.enabled && r.atr_pct < filters.minAtrPct.value) return false;
+
+      // Order Flow
+      if (filters.minImbalanceRatio.enabled && r.imbalance_ratio < filters.minImbalanceRatio.value) return false;
+      if (filters.minStackedLevels.enabled && r.stacked_imbalance < filters.minStackedLevels.value) return false;
+
+      // Volatility
+      if (filters.onlyFiredSqueezes.enabled && filters.onlyFiredSqueezes.value && r.ttm_squeeze_fired === 'NONE') return false;
+
+      // Liquidity
+      if (filters.minObDepth.enabled && r.ob_depth < filters.minObDepth.value) return false;
+      if (filters.maxSlippage.enabled && r.slippage > filters.maxSlippage.value) return false;
+
+      // Market
+      if (filters.marketCapTiers.enabled && !filters.marketCapTiers.value.has(r.market_cap_tier)) return false;
+      if (filters.minVol24h.enabled && r.vol_24h < filters.minVol24h.value) return false;
+
+      return true;
+    });
+  }, [filters]);
+
+  // -----------------------------------------------------------------------
+  // Sort results
+  // -----------------------------------------------------------------------
+  const sortResults = useCallback((items: ScanResult[]): ScanResult[] => {
+    const { sortBy, sortDir } = filters;
+    const sorted = [...items];
+    const dir = sortDir === 'asc' ? 1 : -1;
+
+    sorted.sort((a, b) => {
+      switch (sortBy) {
+        case 'score': return (a.score - b.score) * dir;
+        case 'rvol': return (a.rvol - b.rvol) * dir;
+        case 'price_change_5m': return (a.price_change_5m - b.price_change_5m) * dir;
+        case 'price_change_1h': return (a.price_change_1h - b.price_change_1h) * dir;
+        case 'vol_24h': return (a.vol_24h - b.vol_24h) * dir;
+        case 'rsi': return (a.rsi - b.rsi) * dir;
+        case 'atr_pct': return (a.atr_pct - b.atr_pct) * dir;
+        case 'market_cap_tier': return ((TIER_ORDER[a.market_cap_tier] || 0) - (TIER_ORDER[b.market_cap_tier] || 0)) * dir;
+        default: return 0;
+      }
+    });
+    return sorted;
+  }, [filters]);
+
+  // -----------------------------------------------------------------------
+  // Compute filtered + sorted results
+  // -----------------------------------------------------------------------
+  const results = useMemo(() => {
+    const filtered = applyClientFilters(rawResults);
+    return sortResults(filtered);
+  }, [rawResults, applyClientFilters, sortResults]);
+
+  // -----------------------------------------------------------------------
+  // Scan
+  // -----------------------------------------------------------------------
   const scanMarket = useCallback(async () => {
-    if (!isSessionActive()) {
-        setIsScanning(false);
-        return;
-    }
+    if (scanRef.current) scanRef.current.abort();
+    const controller = new AbortController();
+    scanRef.current = controller;
 
     setIsScanning(true);
     try {
-      const res = await fetch('/api/binance/ticker24?type=spot');
-      if (!res.ok) {
-        const errorText = await res.text().catch(() => 'Unknown error');
-        throw new Error(`HTTP error! status: ${res.status} - ${errorText}`);
-      }
-      const data: Ticker24h[] = await res.json();
-      
-      const candidates: MarketAlert[] = [];
-      const now = Date.now();
-
-      const relevantPairs = data.filter(t => 
-        t.symbol.endsWith('USDT') && 
-        parseFloat(t.quoteVolume) >= filters.minVolume
-      );
-
-      // Process basic movers directly from ticker data for speed and coverage
-      relevantPairs.forEach(t => {
-        const pc = parseFloat(t.priceChangePercent);
-        const qv = parseFloat(t.quoteVolume);
-        
-        // 1. Basic Price Movers (Direct from ticker)
-        if (Math.abs(pc) >= 3) {
-            const isPositive = pc > 0;
-            candidates.push({
-                id: `${t.symbol}-price`,
-                symbol: t.symbol.replace('USDT', ''),
-                fullSymbol: t.symbol,
-                type: isPositive ? 'PRICE_SURGE' : 'PRICE_DROP',
-                severity: Math.abs(pc) > 10 ? 'HIGH' : Math.abs(pc) > 5 ? 'MEDIUM' : 'LOW',
-                message: `${isPositive ? '+' : ''}${pc.toFixed(2)}% price change in 24h`,
-                firstDetected: now,
-                lastUpdated: now,
-                value: pc
-            });
-        }
+      const res = await fetch('/api/scanner/scan?market_type=spot&lookback=120', {
+        signal: controller.signal,
       });
 
-      // 2. High Volume / Relative Surge (Requires Klines for AVG)
-      const topVol = [...relevantPairs].sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume)).slice(0, 30);
-      const topMovers = [...relevantPairs].sort((a, b) => Math.abs(parseFloat(b.priceChangePercent)) - Math.abs(parseFloat(a.priceChangePercent))).slice(0, 30);
-      const candidatesToCheck = Array.from(new Set([...topVol, ...topMovers]));
+      await new Promise(r => setTimeout(r, 500));
 
-      let interval = '15m';
-      let limit = filters.lookbackValue + 5;
-      
-      if (filters.lookbackUnit === 'minutes') { interval = '1m'; }
-      else if (filters.lookbackUnit === 'hours') { interval = '1h'; }
-      else if (filters.lookbackUnit === 'days') { interval = '1d'; }
-      else if (filters.lookbackUnit === 'weeks') { interval = '1w'; }
+      if (!res.ok) throw new Error(`Scanner API returned ${res.status}`);
+      const data = await res.json();
+      const raw: ScanResult[] = data.results || [];
+      console.log(`[Scanner] Fetched ${raw.length} results from backend`);
 
-      const batchSize = 5;
-      for (let i = 0; i < candidatesToCheck.length; i += batchSize) {
-          const batch = candidatesToCheck.slice(i, i + batchSize);
-          await Promise.all(batch.map(async (t) => {
-              try {
-                  const kres = await fetch(`/api/binance/klines?symbol=${t.symbol}&interval=${interval}&limit=${limit}&type=spot`);
-                  if (!kres.ok) return;
-                  const klines = await kres.json();
-                  if (!Array.isArray(klines) || klines.length < filters.lookbackValue) return;
+      setRawResults(raw);
+      setTotalCount(raw.length);
 
-                  const previousKlines = klines.slice(0, klines.length - 1).slice(-filters.lookbackValue);
-                  const currentKline = klines[klines.length - 1];
-                  
-                  const avgVol = previousKlines.reduce((sum: number, k: any) => sum + parseFloat(k[7]), 0) / previousKlines.length;
-                  const currentVol = parseFloat(currentKline[7]);
-                  const volChangePct = ((currentVol - avgVol) / avgVol) * 100;
-
-                  if (volChangePct >= filters.minVolChange) {
-                    candidates.push({
-                        id: `${t.symbol}-vol`,
-                        symbol: t.symbol.replace('USDT', ''),
-                        fullSymbol: t.symbol,
-                        type: 'HIGH_VOLUME',
-                        severity: volChangePct > 200 ? 'HIGH' : volChangePct > 100 ? 'MEDIUM' : 'LOW',
-                        message: `+${volChangePct.toFixed(0)}% Volume Surge vs ${filters.lookbackValue}p avg`,
-                        firstDetected: now,
-                        lastUpdated: now,
-                        value: currentVol
-                    });
-                  }
-              } catch (e) {
-                  // silent skip
-              }
-          }));
-          if (i + batchSize < candidatesToCheck.length) {
-              await new Promise(r => setTimeout(r, 100));
-          }
+      // Auto-subscribe top 10 to backend engine
+      const filtered = applyClientFilters(raw);
+      const topSymbols = Array.from(new Set(filtered.slice(0, 10).map(r => r.symbol)));
+      if (topSymbols.length > 0) {
+        fetch('/api/engine/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(topSymbols),
+        }).catch(() => { });
       }
 
-      setAlerts(prev => {
-          const next = [...prev];
-          
-          candidates.forEach(cand => {
-              const existingIdx = next.findIndex(a => a.id === cand.id);
-              if (existingIdx >= 0) {
-                  next[existingIdx] = {
-                      ...next[existingIdx],
-                      value: cand.value,
-                      message: cand.message,
-                      lastUpdated: now,
-                      severity: cand.severity
-                  };
-              } else {
-                  next.push(cand);
-              }
-          });
-          
-          const sorted = next.sort((a, b) => b.firstDetected - a.firstDetected).slice(0, 200);
-
-          // Tell backend to auto-ingest the top 10 scanner results
-          const topSymbols = Array.from(new Set(sorted.slice(0, 10).map(a => a.fullSymbol.toLowerCase())));
-          if (topSymbols.length > 0) {
-            fetch('/api/engine/subscribe', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(topSymbols)
-            }).catch(e => console.warn("Scanner failed to subscribe assets:", e));
-          }
-
-          return sorted;
-      });
-
-      setLastScan(now);
-    } catch (e) {
-      console.error("Scan failed", e);
+      setLastScan(Date.now());
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        console.error('[Scanner] Scan failed:', e);
+      }
     } finally {
       setIsScanning(false);
     }
-  }, [filters, isSessionActive]);
+  }, [applyClientFilters]);
 
   useEffect(() => {
     scanMarket();
-    const interval = setInterval(scanMarket, 10000);
+    const interval = setInterval(scanMarket, 10_000);
     return () => clearInterval(interval);
   }, [scanMarket]);
 
-  return {
-    alerts,
+  // Count how many filters are currently enabled
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    const filterKeys: FilterKey[] = [
+      'minRvol', 'minVolSurge', 'minPriceChange', 'minVwapDev',
+      'rsiRange', 'minAtrPct', 'minImbalanceRatio', 'minStackedLevels',
+      'onlyFiredSqueezes', 'minObDepth', 'maxSlippage', 'marketCapTiers',
+      'minVol24h', 'minScore'
+    ];
+    for (const key of filterKeys) {
+      const f = filters[key];
+      if (f && typeof f === 'object' && 'enabled' in f && f.enabled) count++;
+    }
+    return count;
+  }, [filters]);
+
+  return useMemo(() => ({
+    results,
+    rawResults,
+    totalCount,
     isScanning,
     lastScan,
     filters,
     setFilters,
-    isSessionActive,
-    scanMarket
-  };
+    toggleFilter,
+    updateFilterValue,
+    updateRangeFilter,
+    setSort,
+    resetFilters,
+    scanMarket,
+    activeFilterCount,
+  }), [results, rawResults, totalCount, isScanning, lastScan, filters, setFilters, toggleFilter, updateFilterValue, updateRangeFilter, setSort, resetFilters, scanMarket, activeFilterCount]);
 }

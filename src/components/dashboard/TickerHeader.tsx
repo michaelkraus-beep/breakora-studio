@@ -1,7 +1,7 @@
 import React from 'react';
 import { Ticker } from '../../types/market';
 import { cn } from '../../lib/utils';
-import { ArrowUp, ArrowDown } from 'lucide-react';
+import { ArrowUp, ArrowDown, Plus } from 'lucide-react';
 import { SymbolSelector } from './SymbolSelector';
 
 interface TickerHeaderProps {

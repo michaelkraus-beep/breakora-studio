@@ -1,4 +1,4 @@
-import React, { Component, useEffect, useRef, useState, useCallback } from 'react';
+import React, { Component, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Candle } from '../../types/market';
 import { Maximize2, Minimize2, Grid, Settings, Info, Zap, Plus, Minus, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, RotateCcw, Ruler, PenTool, Trash2, Palette, MoreHorizontal, MousePointer2, BarChartHorizontal, Check, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -45,6 +45,8 @@ interface CandlestickChartProps {
   instanceId?: string;
   showSettings?: boolean;
   onToggleSettings?: () => void;
+  overrideSettings?: Partial<any>; 
+  simplified?: boolean;
 }
 
 type DrawingTool = 'none' | 'measure_rect' | 'draw_line' | 'horizontal_volume_bars';
@@ -107,7 +109,9 @@ export function CandlestickChart({
   tickSize = 0.01,
   instanceId = 'default',
   showSettings = false,
-  onToggleSettings
+  onToggleSettings,
+  overrideSettings,
+  simplified = false
 }: CandlestickChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -205,6 +209,17 @@ export function CandlestickChart({
       });
   }, [data.length, visibleCount]);
 
+  // Reset zoom and pan on symbol change
+  useEffect(() => {
+    setPriceZoom(1);
+    setPricePan(0);
+    setScrollOffset(0);
+    // If simplified (scanner mode), maybe use a different default visible count?
+    if (simplified) {
+        setVisibleCount(60); 
+    }
+  }, [symbol, simplified]);
+
   // Settings State
   const [settings, setSettings] = useState(() => {
     const defaultSettings = {
@@ -240,7 +255,7 @@ export function CandlestickChart({
       // Footprint Aggregation
       chartFootprintTicksPerRow: 64,
       tapeFootprintTicksPerRow: 2,
-      showFootprintsOnChart: true,
+      showFootprintsOnChart: false,
       autoAggregation: true,
 
       // Oscillator Selection
@@ -278,6 +293,9 @@ export function CandlestickChart({
     
     return defaultSettings;
   });
+
+  // Effective settings merged with overrides
+  const effectiveSettings = useMemo(() => ({ ...settings, ...overrideSettings }), [settings, overrideSettings]);
 
   const updateSettings = (newSettings: Partial<typeof settings>) => {
     setSettings(prev => {
@@ -514,7 +532,7 @@ export function CandlestickChart({
         setPersistentZones([]);
     }
 
-  }, [data, settings]);
+  }, [data, effectiveSettings]);
 
   // Load ML Models
   useEffect(() => {
@@ -749,6 +767,13 @@ export function CandlestickChart({
 
       let minPrice = Math.min(...visibleCandles.map(c => c.low));
       let maxPrice = Math.max(...visibleCandles.map(c => c.high));
+      
+      // Safety Guard: Fallback if price calculation fails
+      if (!isFinite(minPrice) || !isFinite(maxPrice) || isNaN(minPrice) || isNaN(maxPrice)) {
+          minPrice = 0;
+          maxPrice = 100;
+      }
+      
       let priceRange = maxPrice - minPrice;
       
       // Prevent extremely tall candles when there is very little price action or few candles
@@ -1328,7 +1353,7 @@ export function CandlestickChart({
       };
 
       // Draw Zones
-      if (settings.absorptionEnabled) {
+      if (effectiveSettings.absorptionEnabled) {
           absorptionZones.forEach((zone) => {
               if (zone.bottom > maxPrice + padding || zone.top < minPrice - padding) return;
               const yTop = priceToY(zone.top);
@@ -1349,7 +1374,7 @@ export function CandlestickChart({
           });
       }
 
-      if (settings.imbalanceEnabled) {
+      if (effectiveSettings.imbalanceEnabled) {
           imbalanceZones.forEach((zone) => {
               if (zone.bottom > maxPrice + padding || zone.top < minPrice - padding) return;
               const yTop = priceToY(zone.top);
@@ -1370,7 +1395,7 @@ export function CandlestickChart({
           });
       }
 
-      if (settings.persistentZonesEnabled) {
+      if (effectiveSettings.persistentZonesEnabled) {
           persistentZones.forEach((zone) => {
               if (zone.bottom > maxPrice + padding || zone.top < minPrice - padding) return;
               const yTop = priceToY(zone.top);
@@ -1404,7 +1429,7 @@ export function CandlestickChart({
       // ---------------------------------------------------------------
       // Visible Range Volume Profile  (drawn FIRST so candles render on top)
       // ---------------------------------------------------------------
-      if (settings.visibleRangeVolumeProfile && visibleCandles.length > 0) {
+      if (effectiveSettings.visibleRangeVolumeProfile && visibleCandles.length > 0) {
           // Use the full visible viewport including padding so bars fill the entire chart height
           const vpTopPrice = maxPrice + padding;
           const vpBottomPrice = minPrice - padding;
@@ -1444,8 +1469,8 @@ export function CandlestickChart({
           const maxVol = Math.max(...bins.map(b => b.totalVol), 1);
           const totalVolumeInRect = bins.reduce((acc, b) => acc + b.totalVol, 0);
           const vpWidth = chartWidth * 0.15;
-          const direction = settings.volBarsDirection || 'ltr';
-          const opacity = (settings.visibleRangeVolumeProfileOpacity ?? 65) / 100;
+          const direction = effectiveSettings.volBarsDirection || 'ltr';
+          const opacity = (effectiveSettings.visibleRangeVolumeProfileOpacity ?? 65) / 100;
 
           const binTopY    = (i: number) => priceToY(vpBottomPrice + (i + 1) * binSize);
           const binBottomY = (i: number) => priceToY(vpBottomPrice + i * binSize);
@@ -1457,8 +1482,8 @@ export function CandlestickChart({
 
           // Multi-Level LVN Detection (Ranked by Valley Depth)
           const allLvns: { index: number, depth: number }[] = [];
-          const maxLVNs = settings.visibleRangeVPMaxLVNs || 3;
-          const minDepth = settings.visibleRangeVPMinLVNDepth || 0.1;
+          const maxLVNs = effectiveSettings.visibleRangeVPMaxLVNs || 3;
+          const minDepth = effectiveSettings.visibleRangeVPMinLVNDepth || 0.1;
 
           if (bins.length >= 3) {
               for (let i = 1; i < bins.length - 1; i++) {
@@ -1501,7 +1526,7 @@ export function CandlestickChart({
           }
 
           // Draw VA Highlight
-          if (settings.visibleRangeVPShowVA) {
+          if (effectiveSettings.visibleRangeVPShowVA) {
               const topY = binTopY(vaHighIndex);
               const botY = binBottomY(vaLowIndex);
               ctx.fillStyle = 'rgba(45, 212, 191, 0.15)';
@@ -1537,10 +1562,10 @@ export function CandlestickChart({
               if (glow) { ctx.shadowColor = color; ctx.shadowBlur = 4; }
               ctx.stroke(); ctx.shadowBlur = 0; ctx.setLineDash([]);
           };
-          if (settings.visibleRangeVPShowVAHigh) drawVPBeam(binTopY(vaHighIndex),    '#40C4FF');
-          if (settings.visibleRangeVPShowVALow)  drawVPBeam(binBottomY(vaLowIndex),  '#AB47BC');
-          if (settings.visibleRangeVPShowPOC)    drawVPBeam(binMidY(pocBinIndex),    '#FFFFFF', false, true);
-          if (settings.visibleRangeVPShowLVN && rankedLvns.length > 0) {
+          if (effectiveSettings.visibleRangeVPShowVAHigh) drawVPBeam(binTopY(vaHighIndex),    '#40C4FF');
+          if (effectiveSettings.visibleRangeVPShowVALow)  drawVPBeam(binBottomY(vaLowIndex),  '#AB47BC');
+          if (effectiveSettings.visibleRangeVPShowPOC)    drawVPBeam(binMidY(pocBinIndex),    '#FFFFFF', false, true);
+          if (effectiveSettings.visibleRangeVPShowLVN && rankedLvns.length > 0) {
               rankedLvns.forEach((lvn, rank) => {
                   const y = binMidY(lvn.index);
                   const alpha = 1.0 - (rank / maxLVNs) * 0.7;
@@ -1551,7 +1576,7 @@ export function CandlestickChart({
       }
 
       // Draw Candles or Line Chart
-      const gap = slotWidth * (settings.showFootprintsOnChart ? 0.1 : 0.3);
+      const gap = slotWidth * (effectiveSettings.showFootprintsOnChart ? 0.1 : 0.3);
       const candleWidth = slotWidth - gap;
       const xOffset = (effectiveVisibleCount - visibleCandles.length) * slotWidth;
 
@@ -1570,7 +1595,7 @@ export function CandlestickChart({
       } else {
           // --- BEGIN REFACTORED DRAWING LOGIC (PORTED FROM LEGACY) ---
           
-          const showFootprintsAtThisZoom = settings.showFootprintsOnChart && candleWidth > 5;
+          const showFootprintsAtThisZoom = effectiveSettings.showFootprintsOnChart && candleWidth > 5;
           const failedAuctions: { type: 'high' | 'low', price: number, startX: number, endX: number }[] = [];
 
           // 1. Pre-calculate Failed Auctions (Sequential Loop)
@@ -1634,12 +1659,12 @@ export function CandlestickChart({
               if (showFootprintsAtThisZoom && candle.footprint) {
                   const rawLevels = Object.values(candle.footprint);
                   if (rawLevels.length > 0) {
-                      if (settings.autoAggregation || visibleCandles.length <= 10) {
+                      if (effectiveSettings.autoAggregation || visibleCandles.length <= 10) {
                           const pr = maxPrice - minPrice;
                           const totalTicks = pr / tickSize;
                           multiplier = Math.max(1, Math.round(totalTicks / 60));
                       } else {
-                          multiplier = settings.chartFootprintTicksPerRow || 1;
+                          multiplier = effectiveSettings.chartFootprintTicksPerRow || 1;
                           const pr = maxPrice - minPrice;
                           if (pr > 500) multiplier *= 40; 
                           else if (pr > 50) multiplier *= 10;
@@ -1789,7 +1814,7 @@ export function CandlestickChart({
               }
 
               // 5. Imbalance Markers
-              if ((settings.positionImbalanceMode === 'markersOnly' || settings.positionImbalanceMode === 'both')) {
+              if ((effectiveSettings.positionImbalanceMode === 'markersOnly' || effectiveSettings.positionImbalanceMode === 'both')) {
                   const workingLevels = levels;
                   if (workingLevels.length > 0) {
                       let mV = 0; let pL: any = null; let tV = 0; let dP = 0;
@@ -1840,7 +1865,7 @@ export function CandlestickChart({
       }
 
       // Info Label for Footprints
-      if (settings.showFootprintsOnChart) {
+      if (effectiveSettings.showFootprintsOnChart && !simplified) {
           ctx.save();
           ctx.font = '10px sans-serif';
           ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
@@ -1867,7 +1892,7 @@ export function CandlestickChart({
       const lastCandle = validData[validData.length - 1];
 
       // --- Draw Adaptive Swing Areas (The Cage) ---
-      if (squeezer.config.showBoxes) {
+      if (squeezer.config.showBoxes && !simplified) {
           const boxesWithMidline = squeezer.swingAreas.filter(a => a.interestLevel !== null);
 
           squeezer.swingAreas.forEach(area => {
@@ -1942,7 +1967,7 @@ export function CandlestickChart({
       }
 
       // --- Draw Zero-Lag Trendline ---
-      if (squeezer.config.showZeroLag) {
+      if (squeezer.config.showZeroLag && !simplified) {
           ctx.strokeStyle = 'rgba(212, 212, 216, 0.8)'; // Silver
           ctx.lineWidth = 1.5;
           ctx.beginPath();
@@ -2606,9 +2631,10 @@ export function CandlestickChart({
   };
 
   return (
-    <div className="flex w-full h-full min-h-[400px] bg-zinc-950">
+    <div className={cn("flex w-full h-full min-h-[400px]", simplified ? "bg-transparent" : "bg-zinc-950", simplified && "min-h-0")}>
       {/* Left Toolbar */}
-      <div className="w-8 shrink-0 border-r border-zinc-800 flex flex-col items-center py-3 gap-3 z-20 bg-zinc-950 relative h-full">
+      {!simplified && (
+        <div className={cn("w-8 shrink-0 border-r border-zinc-800 flex flex-col items-center py-3 gap-3 z-20 relative h-full", simplified ? "bg-transparent" : "bg-zinc-950")}>
         {/* Measurement Group */}
         <div className="flex flex-col gap-1">
             <button 
@@ -2778,9 +2804,10 @@ export function CandlestickChart({
                         </button>
                     </div>
                 )}
-            </div>
-        )}
-      </div>
+              </div>
+            )}
+        </div>
+      )}
 
       <div 
         ref={wrapperRef}
@@ -2793,6 +2820,14 @@ export function CandlestickChart({
         }}
         onMouseUp={handleMouseUp}
       >
+        {/* Ticker Overlay for Simplified Mode */}
+        {simplified && (
+          <div className="absolute top-2 left-3 z-30 pointer-events-none">
+            <span className="text-sm font-bold text-white tracking-widest uppercase opacity-70">{symbol}</span>
+            <span className="ml-2 text-[10px] font-mono text-zinc-500">1m</span>
+          </div>
+        )}
+
         <div 
             ref={containerRef} 
             className={cn(
@@ -3886,7 +3921,7 @@ export function CandlestickChart({
       </div>
 
         {/* Oscillator Pane */}
-        {showOscillator && (() => {
+        {showOscillator && !simplified && (() => {
             const validData = data.filter(c => !isNaN(c.low) && !isNaN(c.high) && c.low > 0 && c.high > 0);
             const availableWidth = Math.max(dimensions.width - 70, 10);
             const slotWidth = availableWidth / visibleCount;
@@ -3943,7 +3978,8 @@ export function CandlestickChart({
         })()}
 
         {/* Bottom Navigation Bar */}
-        <div className="h-8 shrink-0 bg-zinc-950 border-t border-zinc-800 flex items-center justify-center gap-6 select-none z-20">
+        {!simplified && (
+          <div className="h-8 shrink-0 bg-zinc-950 border-t border-zinc-800 flex items-center justify-center gap-6 select-none z-20">
             {/* Zoom Controls */}
             <div className="flex items-center gap-1">
                 <button 
@@ -4044,7 +4080,8 @@ export function CandlestickChart({
             >
                 <RotateCcw size={14} />
             </button>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

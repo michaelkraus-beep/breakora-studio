@@ -30,3 +30,12 @@ class SqueezeEvent(Base):
     timestamp = Column(BigInteger, index=True, nullable=False)
     features = Column(JSON, nullable=False) # Store the array of extracted ML features
     label = Column(Integer, nullable=False) # 1 for bull success, -1 for bear success, 0 for failure
+
+import time
+
+class MonitoredSymbol(Base):
+    __tablename__ = "monitored_symbols"
+    symbol = Column(String, primary_key=True) # symbol in lowercase, e.g., 'btcusdt'
+    market_type = Column(String, default='spot')
+    active = Column(Boolean, default=True)
+    added_at = Column(BigInteger, default=lambda: int(time.time() * 1000))

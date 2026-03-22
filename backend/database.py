@@ -15,7 +15,10 @@ DATABASE_URL = os.getenv(
 # Create the async SQLAlchemy engine
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True, # Set to False in production
+    echo=False, # Disabled to prevent log flooding and unresponsiveness
+    pool_size=20,
+    max_overflow=10,
+    pool_timeout=30,
 )
 
 # Async session factory

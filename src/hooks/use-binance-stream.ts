@@ -125,6 +125,25 @@ export function useBinanceStream(symbol: string = 'btcusdt', marketType: 'spot' 
       return false;
   }, [symbol, marketType, interval]);
 
+  // Fetch history from our local backend API (Fast + includes footprints)
+  const fetchHistoryFromLocalAPI = useCallback(async (limit: number = 500, signal?: AbortSignal): Promise<Candle[]> => {
+      try {
+          const url = `/api/history?symbol=${symbol.toLowerCase()}&interval=${interval}&limit=${limit}`;
+          const res = await fetch(url, { signal });
+          if (!res.ok) return [];
+          const data = await res.json();
+          if (data && Array.isArray(data.data)) {
+              return data.data.map((c: any) => ({
+                  ...c,
+                  isClosed: c.isClosed ?? true
+              }));
+          }
+      } catch (e) {
+          console.error("Local API fetch failed", e);
+      }
+      return [];
+  }, [symbol, interval]);
+
   // Instant fetch of missing target interval data
   const fetchTargetHistoryFromAPI = useCallback(async (requestEndTime?: number, signal?: AbortSignal): Promise<boolean> => {
       try {
@@ -198,21 +217,35 @@ export function useBinanceStream(symbol: string = 'btcusdt', marketType: 'spot' 
     if (isLoadingHistoryRef.current) return false;
     if (requestEndTime && !hasMoreHistory) return false;
     
-    if (abortControllerRef.current) abortControllerRef.current.abort();
+    // We don't necessarily want to abort EVERYTHING if we are just fetching MORE history
+    // But for a NEW initial load, we should.
     const controller = new AbortController();
-    abortControllerRef.current = controller;
+    if (!requestEndTime) {
+        if (abortControllerRef.current) abortControllerRef.current.abort();
+        abortControllerRef.current = controller;
+    }
     
     setIsLoadingHistory(true);
     isLoadingHistoryRef.current = true;
     
     try {
+        if (!requestEndTime) {
+            const local = await fetchHistoryFromLocalAPI(500, controller.signal);
+            if (local.length > 0) {
+                setCandles(local);
+                candlesRef.current = local;
+                return true;
+            }
+        }
         return await fetchTargetHistoryFromAPI(requestEndTime, controller.signal);
     } finally {
         setIsLoadingHistory(false);
         isLoadingHistoryRef.current = false;
-        abortControllerRef.current = null;
+        if (!requestEndTime && abortControllerRef.current === controller) {
+            abortControllerRef.current = null;
+        }
     }
-  }, [fetchTargetHistoryFromAPI, hasMoreHistory]);
+  }, [fetchTargetHistoryFromAPI, fetchHistoryFromLocalAPI, hasMoreHistory]);
 
   useEffect(() => {
     if (!symbol) return;
@@ -361,6 +394,7 @@ export function useBinanceStream(symbol: string = 'btcusdt', marketType: 'spot' 
     };
 
     connect();
+    // fetchMoreHistory() was redundant here, consolidated in loadInitialData effect
 
     const flushInterval = setInterval(() => {
         if (!isMounted) return;
@@ -631,50 +665,81 @@ export function useBinanceStream(symbol: string = 'btcusdt', marketType: 'spot' 
             
             // 1. Load from IDB immediately to show something
             await loadHistoryFromIDB();
-            
             if (!isMounted) return;
 
-            // 2. Fetch from API with retries for target interval missing parts
-            let retries = 5;
-            let success = false;
-            
-            while (retries > 0 && isMounted && !success) {
-                if (controller.signal.aborted) break;
-                
-                success = await fetchTargetHistoryFromAPI(undefined, controller.signal);
-                if (!success) {
-                    console.warn(`Initial API history load failed, retrying... (${retries} attempts left)`);
-                    retries--;
-                    if (retries > 0 && isMounted && !controller.signal.aborted) {
-                        await new Promise(r => setTimeout(r, 2000));
-                    }
-                }
-            }
-            
-            if (!isMounted || controller.signal.aborted) return;
-            
+            // 2. STAGED LOAD: First 60 minutes for instant visual priority
             const targetMs = INTERVAL_MS[interval] || 60000;
             const now = Date.now();
-            const currentIntervalStart = Math.floor(now / targetMs) * targetMs;
+            const sixtyMinAgo = now - (60 * 60 * 1000);
             
-            try {
-                // Prime 1m buffer just for the CURRENT interval
-                const recent1m = await fetchCandlesChunked(symbol, marketType, '1m', currentIntervalStart, now, controller.signal);
-                recent1m.forEach(c => currentIntervalBuffer.current.set(c.time, c));
-                await persistenceService.saveCandles(symbol, marketType, '1m', recent1m);
-            } catch (e) {
-                console.warn("Failed to prime interval buffer", e);
+            console.log(`[Stream] Starting STAGED LOAD for ${symbol}: 60m priority`);
+            const quickSuccess = await fetchCandlesChunked(symbol, marketType, interval, sixtyMinAgo, now, controller.signal);
+            
+            if (isMounted && quickSuccess.length > 0) {
+                setCandles(prev => {
+                    const combined = [...quickSuccess, ...prev];
+                    const uniqueMap = new Map<number, Candle>();
+                    for (const c of combined) uniqueMap.set(c.time, c);
+                    const sorted = Array.from(uniqueMap.values()).sort((a, b) => a.time - b.time);
+                    candlesRef.current = sorted;
+                    return sorted;
+                });
+                setIsLoadingHistory(false); 
+                isLoadingHistoryRef.current = false;
+            } else if (isMounted) {
+                // If quick success is empty, we still need to stop the loader
+                setIsLoadingHistory(false);
+                isLoadingHistoryRef.current = false;
             }
 
-            // 3. Start slow background 1m footprint backfill
+            // 3. BACKGROUND LOAD: Fill the rest of the 24h window
+            const fullWindowStartTime = now - (24 * 60 * 60 * 1000);
+            console.log(`[Stream] Starting BACKGROUND LOAD for ${symbol}: 24h backfill`);
+            
+            const fullHistory = await fetchCandlesChunked(symbol, marketType, interval, fullWindowStartTime, sixtyMinAgo - 1, controller.signal);
+            
+            if (isMounted && fullHistory.length > 0) {
+                setCandles(prev => {
+                    const combined = [...fullHistory, ...prev];
+                    const uniqueMap = new Map<number, Candle>();
+                    for (const c of combined) {
+                        if (c && typeof c.time === 'number') {
+                            uniqueMap.set(c.time, c);
+                        }
+                    }
+                    const sorted = Array.from(uniqueMap.values()).sort((a, b) => a.time - b.time);
+                    
+                    // Only update if we actually have new data to avoid churn
+                    if (sorted.length > candlesRef.current.length) {
+                        candlesRef.current = sorted;
+                        return sorted;
+                    }
+                    return prev;
+                });
+                persistenceService.saveCandles(symbol, marketType, interval, fullHistory).catch(() => {});
+            }
+
+            // 4. Prime 1m buffer just for the CURRENT interval
+            if (!controller.signal.aborted) {
+                const currentIntervalStart = Math.floor(now / targetMs) * targetMs;
+                try {
+                    const recent1m = await fetchCandlesChunked(symbol, marketType, '1m', currentIntervalStart, now, controller.signal);
+                    recent1m.forEach(c => currentIntervalBuffer.current.set(c.time, c));
+                    await persistenceService.saveCandles(symbol, marketType, '1m', recent1m);
+                } catch (e) {
+                    if (isMounted) console.warn("Failed to prime interval buffer", e);
+                }
+            }
+
+            // 5. Deep background 4-week footprint backfill (unchanged)
             const startBackgroundBackfill = async (signal: AbortSignal) => {
                 const fourWeeksMs = 4 * 7 * 24 * 60 * 60 * 1000;
                 let currentEnd = Date.now();
                 const limitTime = currentEnd - fourWeeksMs;
                 
                 while (currentEnd > limitTime) {
-                    if (signal.aborted) break;
-                    const chunkStart = currentEnd - (1000 * 60000); // 1000 mins per chunk
+                    if (signal.aborted || !isMounted) break;
+                    const chunkStart = currentEnd - (1000 * 60000); 
                     
                     try {
                         const local1m = await persistenceService.get1mCandles(symbol, marketType, chunkStart, currentEnd);
@@ -686,14 +751,16 @@ export function useBinanceStream(symbol: string = 'btcusdt', marketType: 'spot' 
                             await new Promise(r => setTimeout(r, 2000)); 
                         }
                     } catch (e: any) {
-                        if (e.name === 'AbortError') break;
+                        if (e.name === 'AbortError' || !isMounted) break;
                         await new Promise(r => setTimeout(r, 5000));
                     }
                     currentEnd = chunkStart - 1;
                 }
             };
 
-            startBackgroundBackfill(controller.signal);
+            if (!controller.signal.aborted) {
+                startBackgroundBackfill(controller.signal);
+            }
 
         } finally {
             if (isMounted) {

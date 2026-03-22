@@ -177,8 +177,8 @@ class MarketEngine:
                 session.add(new_candle)
 
             await session.commit()
-            status = "closed" if c['is_closed'] else "live"
-            print(f"[DB] Saved {status} 1m candle for {c['symbol']} @ {c['time']}")
+            # status = "closed" if c['is_closed'] else "live"
+            # print(f"[DB] Saved {status} 1m candle for {c['symbol']} @ {c['time']}")
 
     # ------------------------------------------------------------------ #
     # Main streaming loop                                                 #

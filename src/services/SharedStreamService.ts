@@ -341,12 +341,12 @@ class SharedStreamService {
         return () => {
             session!.unsubscribe(callback);
             if (session!.subscriberCount === 0) {
-                // Delay disposal by 30 seconds to handle tab switching/refreshes
+                // Delay disposal by 5 minutes to handle background recording and tab switching
                 const timer = setTimeout(() => {
                     session!.dispose();
                     this.sessions.delete(key);
                     this.disposalTimers.delete(key);
-                }, 30000);
+                }, 300000); // 5 minutes
                 this.disposalTimers.set(key, timer);
             }
         };

@@ -3,10 +3,17 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import asyncio
 import json
+import sys
 import httpx
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from collections import defaultdict, deque
+
+# Fix Windows console encoding (cp1252 can't handle Unicode symbol names)
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 app = FastAPI(title="Breakora Backend")
 
@@ -51,16 +58,29 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # The engine always records 1m candles + footprint as the base resolution
-engine_instance = MarketEngine(['btcusdt', 'ethusdt', 'solusdt', 'bnbusdt'], market_type='spot', ws_manager=manager)
+# Symbols are loaded from the database in the lifespan context
+engine_instance = MarketEngine([], market_type='spot', ws_manager=manager)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Load previously monitored symbols from DB
+    from models import MonitoredSymbol
+    async with AsyncSessionLocal() as session:
+        stmt = select(MonitoredSymbol).where(MonitoredSymbol.active == True)
+        res = await session.execute(stmt)
+        monitored = res.scalars().all()
+        # Ensure we always have at least some defaults if DB is empty
+        initial_symbols = [m.symbol for m in monitored] or ['btcusdt', 'ethusdt', 'solusdt', 'bnbusdt']
+        print(f"[Lifespan] Initializing engine with {len(initial_symbols)} symbols: {initial_symbols}")
+        await engine_instance.update_symbols(initial_symbols)
+
     # Start the live stream in the background
     stream_task = asyncio.create_task(engine_instance.start_stream())
 
     # Run historical backfill in the background
     from historical_backfill import run_backfill
-    backfill_task = asyncio.create_task(run_backfill())
+    initial_pairs = [(sym, 'spot') for sym in initial_symbols]
+    backfill_task = asyncio.create_task(run_backfill(initial_pairs))
 
     yield
 
@@ -144,8 +164,24 @@ async def root():
 
 @app.post("/api/engine/subscribe")
 async def subscribe_symbols(symbols: list[str]):
-    """Dynamically add new symbols to the live recording engine."""
+    """Dynamically add new symbols to the live recording engine and persist them."""
     await engine_instance.update_symbols(symbols)
+    
+    # Persist to DB
+    from models import MonitoredSymbol
+    from sqlalchemy.dialects.postgresql import insert as pg_insert 
+    # Check if we are using postgres or sqlite for the correct 'upsert'
+    async with AsyncSessionLocal() as session:
+        for sym in symbols:
+            s_low = sym.lower()
+            # Try to handle upsert generically or just check existence
+            stmt = select(MonitoredSymbol).where(MonitoredSymbol.symbol == s_low)
+            res = await session.execute(stmt)
+            existing = res.scalar_one_or_none()
+            if not existing:
+                session.add(MonitoredSymbol(symbol=s_low, active=True))
+        await session.commit()
+
     return {"status": "subscribed", "total_symbols": list(engine_instance.symbols)}
 
 @app.get("/api/history")
@@ -271,6 +307,45 @@ async def get_ticker_24h(type: str = 'spot'):
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(f"{base_url}{endpoint}")
         return JSONResponse(content=response.json())
+
+
+# ---------------------------------------------------------------------------
+# Scanner endpoints
+# ---------------------------------------------------------------------------
+import scanner_service
+
+@app.get("/api/scanner/scan")
+async def scanner_scan(market_type: str = 'spot', lookback: int = 120):
+    """Run a full market scan across all ingested symbols."""
+    try:
+        print(f"[API] Starting scanner_scan: market_type={market_type}, lookback={lookback}")
+        results = await scanner_service.scan(market_type=market_type, lookback_1m=lookback)
+        
+        # Proactive discovery: auto-subscribe symbols found by discovery (Limit to top 3 per scan)
+        discovery_results = [r for r in results if r.get('discovery')]
+        discovery_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+        discovered_symbols = [r['symbol'] for r in discovery_results[:3]]
+        
+        if discovered_symbols:
+            print(f"[Scanner] Auto-subscribing top 3 discovered symbols: {discovered_symbols}")
+            await engine_instance.update_symbols(discovered_symbols)
+            # Also trigger backfill
+            from historical_backfill import schedule_backfill
+            for sym in discovered_symbols:
+                schedule_backfill(sym, market_type)
+
+        return {"results": results, "count": len(results)}
+    except Exception as e:
+        import traceback
+        print(f"[API] Scanner error: {e}")
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/scanner/symbols")
+async def scanner_symbols():
+    """List all symbols the engine is currently monitoring."""
+    return {"symbols": list(engine_instance.symbols)}
 
 
 # ---------------------------------------------------------------------------
