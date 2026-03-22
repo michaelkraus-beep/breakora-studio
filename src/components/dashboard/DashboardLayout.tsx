@@ -9,6 +9,7 @@ import { OrderBookView } from './OrderBookView';
 import { VolumeDeltaChart } from './VolumeDeltaChart';
 import { VolumeFootOscillatorPane } from './VolumeFootOscillatorPane';
 import { PhaseSqueezerOscillatorPane } from './PhaseSqueezerOscillatorPane';
+import { WikiTab } from './WikiTab';
 import { Candle, Ticker, Trade } from '../../types/market';
 import { LayoutGrid, Plus, Monitor, Settings, Zap } from 'lucide-react';
 import { ChartGroup } from './ChartGroup';
@@ -24,6 +25,8 @@ interface DashboardLayoutProps {
   spawnRequest?: { symbol: string; marketType: 'spot' | 'perp'; timestamp: number } | null;
   onActiveChartChange?: (state: { symbol: string, marketType: 'spot' | 'perp', timeframe: string }) => void;
   onClearSpawnRequest?: () => void;
+  wikiSpawnRequest?: string | null;
+  onClearWikiSpawnRequest?: () => void;
 }
 
 const DEFAULT_LAYOUT: IJsonModel = {
@@ -56,6 +59,13 @@ const DEFAULT_LAYOUT: IJsonModel = {
                 name: "Chart",
                 component: "chart",
                 id: "chart-1"
+              },
+              {
+                type: "tab",
+                name: "WIKI",
+                component: "wiki",
+                id: "wiki-base",
+                config: { slug: "introduction" }
               }
             ]
           }
@@ -176,7 +186,9 @@ export const DashboardLayout = React.memo(function DashboardLayout({
   tickSize,
   spawnRequest,
   onActiveChartChange,
-  onClearSpawnRequest
+  onClearSpawnRequest,
+  wikiSpawnRequest,
+  onClearWikiSpawnRequest
 }: DashboardLayoutProps) {
 
   const [model, setModel] = useState<Model>(() => {
@@ -312,8 +324,7 @@ export const DashboardLayout = React.memo(function DashboardLayout({
       return newState;
     });
 
-    // Check if this IS the active chart, and notify parent if so
-    const selected = modelRef.current.getSelectedNode();
+    const selected = (modelRef.current as any).getSelectedNode?.() || (modelRef.current.getActiveTabset() as any)?.getSelectedNode?.();
     if (selected?.getId() === instanceId) {
       // Logic for active chart notification goes here if needed
     }
@@ -540,6 +551,69 @@ export const DashboardLayout = React.memo(function DashboardLayout({
     }
   }, [spawnRequest, onClearSpawnRequest]);
 
+  const openWikiTab = useCallback((slug: string) => {
+    const currentModel = model;
+    let existingWikiId: string | null = null;
+    currentModel.visitNodes((n) => {
+      if (n.getType() === 'tab' && (n as TabNode).getComponent() === 'wiki') {
+        existingWikiId = n.getId();
+      }
+    });
+
+    if (existingWikiId) {
+      // Focus existing tab
+      currentModel.doAction(Actions.selectTab(existingWikiId));
+      
+      // Update config slug so if it ever unmounts, it reverts to the right one
+      currentModel.doAction(Actions.updateNodeAttributes(existingWikiId, { config: { slug } }));
+      
+      setModel(Model.fromJson(currentModel.toJson()));
+      
+      // 150ms delay because flexlayout-react needs to render the react element first!
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('wiki-navigate', { detail: { slug } }));
+      }, 150);
+    } else {
+      // Create new tab
+      const id = `wiki-${Date.now()}`;
+      const tabJson = {
+        type: "tab",
+        component: "wiki",
+        name: "WIKI",
+        id: id,
+        config: { slug }
+      };
+      
+      let targetNode: string | undefined = "main-chart-tabset";
+      if (!currentModel.getNodeById(targetNode)) {
+        targetNode = undefined;
+        currentModel.visitNodes(n => { if (!targetNode && n.getType() === 'tabset') targetNode = n.getId(); });
+      }
+      if (targetNode) {
+        currentModel.doAction(Actions.addNode(tabJson, targetNode, DockLocation.CENTER, -1, true));
+        setModel(Model.fromJson(currentModel.toJson()));
+      }
+    }
+  }, [model]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail && customEvent.detail.slug) {
+        openWikiTab(customEvent.detail.slug);
+      }
+    };
+    window.addEventListener('open-wiki', handler);
+    return () => window.removeEventListener('open-wiki', handler);
+  }, [openWikiTab]);
+
+  useEffect(() => {
+    if (wikiSpawnRequest) {
+      openWikiTab(wikiSpawnRequest);
+      onClearWikiSpawnRequest?.();
+    }
+  }, [wikiSpawnRequest, openWikiTab, onClearWikiSpawnRequest]);
+
   const onRenderTabSet = useCallback((node: any, renderValues: any) => {
     const selectedTab = node.getSelectedNode() as TabNode | undefined;
     const isChart = selectedTab && selectedTab.getComponent() === 'chart';
@@ -659,6 +733,7 @@ export const DashboardLayout = React.memo(function DashboardLayout({
       case "delta_chart": return <SelfStreamingDeltaChart symbol={state.symbol} marketType={state.marketType} />;
       case "foot_oscillator": return <SelfStreamingFootOscillator symbol={state.symbol} marketType={state.marketType} />;
       case "phase_oscillator": return <SelfStreamingPhaseOscillator symbol={state.symbol} marketType={state.marketType} />;
+      case "wiki": return <WikiTab initialSlug={config.slug} />;
       default: return <div>Unknown {component}</div>;
     }
   }, [chartStates, updateChartState]);

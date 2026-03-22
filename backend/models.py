@@ -39,3 +39,11 @@ class MonitoredSymbol(Base):
     market_type = Column(String, default='spot')
     active = Column(Boolean, default=True)
     added_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+class WikiArticle(Base):
+    __tablename__ = "wiki_articles"
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String, index=True, unique=True, nullable=False)
+    title = Column(String, nullable=False)
+    category = Column(String, index=True, nullable=False)
+    content = Column(String, nullable=False)

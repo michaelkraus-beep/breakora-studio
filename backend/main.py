@@ -411,5 +411,35 @@ async def get_ml_status(symbol: str):
         }
 
 
+# ---------------------------------------------------------------------------
+# Wiki endpoints
+# ---------------------------------------------------------------------------
+from models import WikiArticle
+
+@app.get("/api/wiki/index")
+async def get_wiki_index():
+    async with AsyncSessionLocal() as session:
+        stmt = select(WikiArticle.slug, WikiArticle.title, WikiArticle.category)
+        result = await session.execute(stmt)
+        articles = result.all()
+        return [{"slug": row[0], "title": row[1], "category": row[2]} for row in articles]
+
+@app.get("/api/wiki/articles/{slug}")
+async def get_wiki_article(slug: str):
+    async with AsyncSessionLocal() as session:
+        stmt = select(WikiArticle).where(WikiArticle.slug == slug)
+        result = await session.execute(stmt)
+        article = result.scalar_one_or_none()
+        if not article:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Article not found")
+        return {
+            "slug": article.slug,
+            "title": article.title,
+            "category": article.category,
+            "content": article.content
+        }
+
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

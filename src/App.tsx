@@ -35,6 +35,7 @@ export default function App() {
   const [timeframe, setTimeframe] = useState(() => localStorage.getItem('timeframe') || '1m');
   const [currentView, setCurrentView] = useState<View>('DASHBOARD');
   const [spawnRequest, setSpawnRequest] = useState<{ symbol: string; marketType: 'spot' | 'perp'; timestamp: number } | null>(null);
+  const [wikiSpawnRequest, setWikiSpawnRequest] = useState<string | null>(null);
   
   // Use shared stream for the global header/ticker
   const { ticker, latency, tickSize } = useSharedStream(activeSymbol, marketType, timeframe);
@@ -71,6 +72,18 @@ export default function App() {
   // Lifted Scanner State
   const scanner = useMarketScanner();
 
+  useEffect(() => {
+    const handleOpenWiki = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail && customEvent.detail.slug) {
+        setWikiSpawnRequest(customEvent.detail.slug);
+        setCurrentView('DASHBOARD');
+      }
+    };
+    window.addEventListener('open-wiki', handleOpenWiki);
+    return () => window.removeEventListener('open-wiki', handleOpenWiki);
+  }, []);
+
   const handleActiveChartChange = useCallback((state: { symbol: string, marketType: 'spot' | 'perp', timeframe: string }) => {
     if (!state || !state.symbol || !state.marketType) {
         console.warn("[App] Received invalid state in handleActiveChartChange:", state);
@@ -91,6 +104,10 @@ export default function App() {
 
   const handleClearSpawnRequest = useCallback(() => {
     setSpawnRequest(null);
+  }, []);
+
+  const handleClearWikiSpawnRequest = useCallback(() => {
+    setWikiSpawnRequest(null);
   }, []);
 
   return (
@@ -155,6 +172,8 @@ export default function App() {
                     tickSize={tickSize}
                     spawnRequest={spawnRequest}
                     onClearSpawnRequest={handleClearSpawnRequest}
+                    wikiSpawnRequest={wikiSpawnRequest}
+                    onClearWikiSpawnRequest={handleClearWikiSpawnRequest}
                     onActiveChartChange={handleActiveChartChange}
                 />
             </div>

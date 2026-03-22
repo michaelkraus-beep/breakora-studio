@@ -9,6 +9,7 @@ import { cn } from '../../lib/utils';
 import { useMarketScanner } from '../../hooks/use-market-scanner';
 import { HexTile } from './HexTile';
 import { CandlestickChart } from './CandlestickChart';
+import { ContextualHelp } from './ContextualHelp';
 
 const ScannerChartPreview = React.memo(({ candles, symbol }: { candles: any[], symbol: string }) => {
   const settings = useMemo(() => ({
@@ -198,6 +199,7 @@ export function MarketScanner({ onSelectSymbol, scannerState }: MarketScannerPro
             {isScanning && <div className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-cyan-400 rounded-full animate-ping" />}
           </div>
           <h2 className="text-sm font-bold text-zinc-200 font-display tracking-tight uppercase">Market Scanner</h2>
+          <ContextualHelp slug="market-scanner" className="ml-1" />
           <span className="text-[10px] font-mono text-zinc-500 bg-zinc-900/80 px-2 py-0.5 border border-zinc-800/60" style={{ clipPath: HEX_CLIP_WIDE }}>
             {results.length}{activeFilterCount > 0 && <span className="text-zinc-600"> / {totalCount}</span>}
           </span>
