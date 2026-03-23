@@ -274,6 +274,7 @@ export function CandlestickChart({
       volBarsDirection: 'ltr' as 'ltr' | 'rtl',
       visibleRangeVolumeProfile: false,
       visibleRangeVolumeProfileOpacity: 65,
+      visibleRangeVPNumBins: 100,
       visibleRangeVPShowVA: false,
       visibleRangeVPShowVAHigh: false,
       visibleRangeVPShowVALow: false,
@@ -1434,7 +1435,7 @@ export function CandlestickChart({
           const vpTopPrice = maxPrice + padding;
           const vpBottomPrice = minPrice - padding;
           const vpPriceRange = vpTopPrice - vpBottomPrice;
-          const numBins = 100;
+          const numBins = effectiveSettings.visibleRangeVPNumBins || 100;
           const binSize = vpPriceRange / numBins;
           
           const bins = new Array(numBins).fill(0).map(() => ({ buyVol: 0, sellVol: 0, totalVol: 0 }));
@@ -3510,19 +3511,6 @@ export function CandlestickChart({
                 <div className="border-b border-zinc-800 pb-3">
                     <h4 className="text-zinc-400 font-bold mb-2">Horizontal Volume Bars</h4>
                     <div className="space-y-2">
-                        <div className="flex items-center justify-between" title="Number of bars to display vertically. Set to 0 for auto (1 bar per candle).">
-                            <span className="text-[10px] text-zinc-400">Vertical Resolution (Bars)</span>
-                            <div className="flex items-center gap-1">
-                                <input 
-                                    type="number" 
-                                    min="0" 
-                                    value={Number.isNaN(settings.volBarsNumBars) ? '' : settings.volBarsNumBars} 
-                                    onChange={e => updateSettings({volBarsNumBars: parseInt(e.target.value)})} 
-                                    className="w-12 bg-zinc-900 border border-zinc-700 text-[10px] text-center rounded focus:ring-1 focus:ring-cyan-500" 
-                                />
-                                <span className="text-[10px] text-zinc-500">{settings.volBarsNumBars === 0 ? '(Auto)' : ''}</span>
-                            </div>
-                        </div>
                         <div className="flex items-center justify-between" title="Direction of the volume bars.">
                             <span className="text-[10px] text-zinc-400">Drawing Direction</span>
                             <select 
@@ -3551,6 +3539,21 @@ export function CandlestickChart({
                                         max="100" 
                                         value={Number.isNaN(settings.visibleRangeVolumeProfileOpacity) ? 65 : settings.visibleRangeVolumeProfileOpacity} 
                                         onChange={e => updateSettings({ visibleRangeVolumeProfileOpacity: parseInt(e.target.value) })} 
+                                        className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-cyan-500" 
+                                    />
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                    <div className="flex justify-between">
+                                        <span className="text-[10px] text-zinc-400">Resolution (Bins)</span>
+                                        <span className="text-[10px] text-zinc-400">{settings.visibleRangeVPNumBins || 100}</span>
+                                    </div>
+                                    <input 
+                                        type="range" 
+                                        min="10" 
+                                        max="300" 
+                                        step="10"
+                                        value={settings.visibleRangeVPNumBins || 100} 
+                                        onChange={e => updateSettings({ visibleRangeVPNumBins: parseInt(e.target.value) })} 
                                         className="w-full h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-cyan-500" 
                                     />
                                 </div>

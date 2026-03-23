@@ -82,6 +82,7 @@ export function MarketScanner({ onSelectSymbol, scannerState }: MarketScannerPro
   } = scannerState;
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [hoveredSymbol, setHoveredSymbol] = useState<string | null>(null);
+  const [debouncedHoveredSymbol, setDebouncedHoveredSymbol] = useState<string | null>(null);
   const [activeZSymbols, setActiveZSymbols] = useState<Set<string>>(new Set());
   const zIndexTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
 
@@ -116,10 +117,17 @@ export function MarketScanner({ onSelectSymbol, scannerState }: MarketScannerPro
     };
   }, [hoveredSymbol]);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedHoveredSymbol(hoveredSymbol);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [hoveredSymbol]);
+
   const previewSymbol = useMemo(() => {
-    const raw = (hoveredSymbol || (results.length > 0 ? results[0].symbol : 'btcusdt')).toLowerCase();
+    const raw = (debouncedHoveredSymbol || (results.length > 0 ? results[0].symbol : 'btcusdt')).toLowerCase();
     return raw.endsWith('usdt') ? raw : raw + 'usdt';
-  }, [hoveredSymbol, results]);
+  }, [debouncedHoveredSymbol, results]);
 
   const { candles: previewCandles } = useBinanceStream(previewSymbol, 'spot', '1m');
 

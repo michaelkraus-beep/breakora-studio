@@ -17,6 +17,7 @@ import { useSharedStream } from '../../hooks/use-shared-stream';
 import { useAdaptivePhaseSqueezer } from '../../hooks/useAdaptivePhaseSqueezer';
 import { cn } from '../../lib/utils';
 import { SymbolSelector } from './SymbolSelector';
+import { ContextualHelp } from './ContextualHelp';
 
 interface DashboardLayoutProps {
   symbol: string;
@@ -616,7 +617,8 @@ export const DashboardLayout = React.memo(function DashboardLayout({
 
   const onRenderTabSet = useCallback((node: any, renderValues: any) => {
     const selectedTab = node.getSelectedNode() as TabNode | undefined;
-    const isChart = selectedTab && selectedTab.getComponent() === 'chart';
+    const activeComponent = selectedTab ? selectedTab.getComponent() : null;
+    const isChart = activeComponent === 'chart';
     const instanceId = selectedTab?.getId();
 
     const handlePlusAction = (e: React.MouseEvent, type: string) => {
@@ -665,6 +667,26 @@ export const DashboardLayout = React.memo(function DashboardLayout({
         >
           <Settings size={12} />
         </button>
+      );
+    }
+
+    // Map component types to their respective Wiki slugs
+    const componentSlugMap: Record<string, string> = {
+      'chart': 'advanced-candlestick-footprint-chart',
+      'foot_tape': 'tape-order-flow-tools-foottape-nutape',
+      'nu_tape': 'tape-order-flow-tools-foottape-nutape',
+      'trades': 'tape-order-flow-tools-foottape-nutape',
+      'order_book': 'order-book-view-dom',
+      'delta_chart': 'volume-foot-oscillator',
+      'foot_oscillator': 'volume-foot-oscillator',
+      'phase_oscillator': 'phase-squeezer-oscillator'
+    };
+
+    if (activeComponent && componentSlugMap[activeComponent]) {
+      renderValues.buttons.push(
+        <div key="contextual-help" className="flex items-center justify-center mr-2 opacity-50 hover:opacity-100 transition-opacity">
+          <ContextualHelp slug={componentSlugMap[activeComponent]} />
+        </div>
       );
     }
 
