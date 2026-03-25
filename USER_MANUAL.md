@@ -93,7 +93,7 @@ The dedicated Backtester workspace is divided into several panels:
 
 ---
 
-## 7. Hive-Tech Wiki System
+## 9. Hive-Tech Wiki System
 **Description:** The centralized contextual help platform.
 **Usage:**
 - **Navigation:** Click the `(?)` contextual help buttons scattered throughout the app (e.g., on the title bar of the Market Scanner). This summons the Wiki Tab directly to your screen.
@@ -102,7 +102,7 @@ The dedicated Backtester workspace is divided into several panels:
 
 ---
 
-## 8. Dashboard Layout Engine
+## 10. Dashboard Layout Engine
 **Description:** The structural backbone of the UI.
 **Usage:**
 - **Tab Spawning:** Use the global `(+)` button in the top left header to manually add new charts, tapes, or scanners to the view.

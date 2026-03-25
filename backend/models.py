@@ -15,6 +15,8 @@ class Candle(Base):
     low = Column(Float, nullable=False)
     close = Column(Float, nullable=False)
     volume = Column(Float, nullable=False)
+    quote_volume = Column(Float, nullable=True) # Quote asset volume
+    count = Column(Integer, nullable=True)       # Trade count
     is_closed = Column(Boolean, default=False)
     
     # Store footprint data as JSON. In a heavier app, we might normalize this 

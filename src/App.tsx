@@ -3,14 +3,15 @@ import { useBinanceStream } from './hooks/use-binance-stream';
 import { TickerHeader } from './components/dashboard/TickerHeader';
 import { DashboardLayout } from './components/dashboard/DashboardLayout';
 import { MarketScanner } from './components/dashboard/MarketScanner';
-import { LayoutGrid, Zap } from 'lucide-react';
+import { BacktesterTab } from './components/backtester/BacktesterTab';
+import { LayoutGrid, Zap, FlaskConical } from 'lucide-react';
 import { cn } from './lib/utils';
 import { Logo } from './components/Logo';
 
 import { useSharedStream } from './hooks/use-shared-stream';
 import { useMarketScanner } from './hooks/use-market-scanner';
 
-type View = 'DASHBOARD' | 'SCANNER';
+type View = 'DASHBOARD' | 'SCANNER' | 'BACKTESTER';
 
 /**
  * Memoized View Wrapper to prevent App's ticker re-renders from hitting the scanner
@@ -33,9 +34,23 @@ export default function App() {
     return (saved === 'spot' || saved === 'perp') ? saved : 'spot';
   });
   const [timeframe, setTimeframe] = useState(() => localStorage.getItem('timeframe') || '1m');
-  const [currentView, setCurrentView] = useState<View>('DASHBOARD');
+  const [currentView, setCurrentView] = useState<View>(() => {
+    if (window.location.pathname === '/backtester') return 'BACKTESTER';
+    if (window.location.pathname === '/scanner') return 'SCANNER';
+    return 'DASHBOARD';
+  });
   const [spawnRequest, setSpawnRequest] = useState<{ symbol: string; marketType: 'spot' | 'perp'; timestamp: number } | null>(null);
   const [wikiSpawnRequest, setWikiSpawnRequest] = useState<string | null>(null);
+
+  const currentViewRef = useRef<View>(currentView);
+  useEffect(() => {
+    currentViewRef.current = currentView;
+    // Update URL without reload to match state
+    const path = currentView === 'DASHBOARD' ? '/' : `/${currentView.toLowerCase()}`;
+    if (window.location.pathname !== path) {
+        window.history.pushState({}, '', path);
+    }
+  }, [currentView]);
   
   // Use shared stream for the global header/ticker
   const { ticker, latency, tickSize } = useSharedStream(activeSymbol, marketType, timeframe);
@@ -77,7 +92,10 @@ export default function App() {
       const customEvent = e as CustomEvent;
       if (customEvent.detail && customEvent.detail.slug) {
         setWikiSpawnRequest(customEvent.detail.slug);
-        setCurrentView('DASHBOARD');
+        // Only flip to dashboard if we are in scanner (using ref to avoid stale closure)
+        if (currentViewRef.current === 'SCANNER') {
+            setCurrentView('DASHBOARD');
+        }
       }
     };
     window.addEventListener('open-wiki', handleOpenWiki);
@@ -99,7 +117,9 @@ export default function App() {
     console.log("[App] Scanner selection triggered for:", s);
     // Defer setting active symbol until the dashboard spawns and selects the new tab
     setSpawnRequest({ symbol: s, marketType, timestamp: Date.now() });
-    setCurrentView('DASHBOARD');
+    if (currentViewRef.current === 'SCANNER') {
+        setCurrentView('DASHBOARD');
+    }
   }, [marketType]);
 
   const handleClearSpawnRequest = useCallback(() => {
@@ -136,6 +156,12 @@ export default function App() {
                 onClick={() => setCurrentView('SCANNER')}
                 icon={<Zap size={14} />}
                 label="SCANNER"
+            />
+            <NavButton 
+                active={currentView === 'BACKTESTER'} 
+                onClick={() => setCurrentView('BACKTESTER')}
+                icon={<FlaskConical size={14} />}
+                label="BACKTESTER"
             />
         </div>
 
@@ -184,6 +210,12 @@ export default function App() {
                 scanner={scanner}
                 onSelectSymbol={handleSelectSymbol}
             />
+          )}
+
+          {currentView === 'BACKTESTER' && (
+            <div className="flex-1 overflow-hidden min-h-0">
+                <BacktesterTab />
+            </div>
           )}
       </div>
 

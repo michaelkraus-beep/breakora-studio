@@ -1,6 +1,7 @@
 import asyncio
 from database import engine, Base
 import models # ensure tables are registered
+import backtester.models
 
 async def main():
     async with engine.begin() as conn:

@@ -65,6 +65,8 @@ engine_instance = MarketEngine([], market_type='spot', ws_manager=manager)
 async def lifespan(app: FastAPI):
     # Load previously monitored symbols from DB
     from models import MonitoredSymbol
+    from backtester.models import BacktestRun, BacktestTrade  # Ensure tables exist
+    
     async with AsyncSessionLocal() as session:
         stmt = select(MonitoredSymbol).where(MonitoredSymbol.active == True)
         res = await session.execute(stmt)
@@ -88,6 +90,9 @@ async def lifespan(app: FastAPI):
     backfill_task.cancel()
 
 app.router.lifespan_context = lifespan
+
+from backtester.router import router as backtester_router
+app.include_router(backtester_router)
 
 # ---------------------------------------------------------------------------
 # DB imports

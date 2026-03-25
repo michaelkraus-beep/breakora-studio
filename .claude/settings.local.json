@@ -5,7 +5,12 @@
       "Bash(python ../test_db_query.py)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(playwright --version)",
+      "Bash(npm install:*)",
+      "Bash(npm config:*)",
+      "Bash(npm uninstall:*)"
     ]
   }
 }
